@@ -1,0 +1,24 @@
+[[package]]
+name = "msgpack"
+version = "1.0.4"
+description = "MessagePack serializer"
+category = "main"
+optional = false
+python-versions = "*"
+
+[[package]]
+name = "pycryptodome"
+version = "3.17"
+description = "Cryptographic library for Python"
+category = "main"
+optional = false
+python-versions = ">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*, !=3.4.*"
+
+[metadata]
+lock-version = "1.1"
+python-versions = ">=3.8"
+content-hash = "8c34936357c930aaaeabcce158e79cb257901d1a57476f949dc73d6a28106e1a"
+
+[metadata.files]
+msgpack = []
+pycryptodome = []
