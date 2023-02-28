@@ -48,7 +48,7 @@ def candidate_listener(role: Candidate):
 
 def state_apply_handler(state_machine: StateMachine, command: Dict[str, Any]):
     state_machine.update({command})
-    print(f'已将命令[{command}]应用到状态机中，key: {command.keys()}，value: {[state_machine[k] for k in command.keys()]}')
+    print(f'已将命令[{command}]应用到状态机中，key: {command.keys()}')
 
 
 async def start(

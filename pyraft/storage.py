@@ -208,7 +208,7 @@ class FilePersistentState(FileDictStorage):
             serializer: Optional[AbstractSerializer] = None,
             loop: Optional[asyncio.AbstractEventLoop] = None
     ):
-        super().__init__(filename=f'{server_id}.state', cache_dir=cache_dir, serializer=serializer, loop=loop)
+        super().__init__(filename=f'{server_id.replace(":", "-")}.state', cache_dir=cache_dir, serializer=serializer, loop=loop)
 
     @property
     def current_term(self) -> int:
@@ -235,7 +235,7 @@ class FilePersistentLog(FileListStorage):
             serializer: Optional[AbstractSerializer] = None,
             loop: Optional[asyncio.AbstractEventLoop] = None
     ):
-        super().__init__(filename=f'{server_id}.log', cache_dir=cache_dir, serializer=serializer, loop=loop)
+        super().__init__(filename=f'{server_id.replace(":", "-")}.log', cache_dir=cache_dir, serializer=serializer, loop=loop)
 
         self.commit_index = 0
         self.last_applied = 0
