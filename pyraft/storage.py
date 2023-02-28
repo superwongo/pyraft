@@ -9,11 +9,11 @@
 
 import asyncio
 from abc import ABCMeta, abstractmethod
-from typing import Optional, Union, Dict, AnyStr, Any, List
+from typing import Optional, Union, Dict, AnyStr, Any, List, Iterator, Callable
 from pathlib import Path
 from collections import defaultdict
 
-from pyraft.serializer import AbstractSerializer
+from pyraft.serializer import AbstractSerializer, JsonSerializer
 from pyraft.config import settings
 from pyraft.schema import LogEntry
 
@@ -22,7 +22,7 @@ __all__ = ('AbstractDictStorage', 'AbstractListStorage', 'FilePersistentState', 
 
 class AbstractDictStorage(metaclass=ABCMeta):
     def __init__(self, serializer: Optional[AbstractSerializer] = None):
-        self.serializer = serializer
+        self.serializer = serializer or JsonSerializer()
         self._cache = {}
 
     @abstractmethod
@@ -33,35 +33,33 @@ class AbstractDictStorage(metaclass=ABCMeta):
     def _set_storage_content(self, content: Union[Dict, AnyStr]) -> None:
         ...
 
-    def __getitem__(self, key: str) -> Any:
+    def get(self, key: str) -> Any:
         if key not in self._cache:
             self.refresh()
         if key not in self._cache:
             raise KeyError(f'{self.__class__.__name__}中不存在键[{key}]')
         return self._cache[key]
 
-    def __setitem__(self, key: str, value: Any) -> None:
+    def set(self, key: str, value: Any) -> None:
         self.refresh()
         self._cache[key] = value
-        setattr(self, key, value)
-        self._set_storage_content(self.serializer.pack(self._cache) if self.serializer else self._cache)
+        self._set_storage_content(self.serializer.pack(self._cache))
 
     def update(self, kwargs):
         self.refresh()
         for key, value in kwargs.items():
             self._cache[key] = value
-            setattr(self, key, value)
-        self._set_storage_content(self.serializer.pack(self._cache) if self.serializer else self._cache)
+        self._set_storage_content(self.serializer.pack(self._cache))
 
     def refresh(self):
         content = self._get_storage_content()
-        if self.serializer:
+        if self.serializer and content:
             content = self.serializer.unpack(content)
-        self._cache = content
+        self._cache = content if isinstance(content, Dict) else {}
 
     def exists(self, key: str) -> bool:
         try:
-            self.__getitem__(key)
+            self.get(key)
             return True
         except KeyError:
             return False
@@ -83,7 +81,7 @@ class AbstractListStorage(metaclass=ABCMeta):
         ...
 
     @abstractmethod
-    def _set_storage_items(self, items: List[AnyStr]) -> None:
+    def _set_storage_items(self, items: Iterator[Any]) -> None:
         ...
 
     def __getitem__(self, index: int) -> Any:
@@ -102,7 +100,7 @@ class AbstractListStorage(metaclass=ABCMeta):
     def refresh(self):
         items = self._get_storage_items()
         if self.serializer:
-            items = [self.serializer.unpack(item) for item in self.serializer.unpack(items)]
+            items = list(map(self.serializer.unpack, items))
         self._cache = items
 
     def exists(self, index: int) -> bool:
@@ -135,11 +133,16 @@ class AbstractListStorage(metaclass=ABCMeta):
         return self._cache[start_index-1:]
 
     def append_items(self, items: List[Any]) -> None:
-        self._set_storage_items([self.serializer.pack(item) for item in items])
+        self._set_storage_items(list(map(self.serializer.pack, items)))
         if len(self) % self.UPDATE_CACHE_INTERVAL:
             self._cache.extend(items)
         else:
             self.refresh()
+
+    def erase_from(self, index: int):
+        new_cache = self._cache[:index-1]
+        self._set_storage_items(map(self.serializer.pack, new_cache))
+        self._cache = new_cache
 
 
 class FileDictStorage(AbstractDictStorage):
@@ -154,16 +157,16 @@ class FileDictStorage(AbstractDictStorage):
         self.cache_dir = Path(self.cache_dir) if isinstance(self.cache_dir, str) else self.cache_dir
         self.file_path = self.cache_dir / filename
         super().__init__(serializer)
-        self.serializer = self.serializer or settings.serializer
+        self.serializer = self.serializer or settings.SERIALIZER
         self.loop = loop or asyncio.get_event_loop()
-        self.cache_dir.mkdir(exist_ok=True)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.file_path.touch(exist_ok=True)
 
-    def _get_storage_content(self) -> str:
-        return self.file_path.read_text()
+    def _get_storage_content(self) -> bytes:
+        return self.file_path.read_bytes()
 
-    def _set_storage_content(self, content: str) -> None:
-        self.file_path.write_text(content)
+    def _set_storage_content(self, content: bytes) -> None:
+        self.file_path.write_bytes(content)
 
 
 class FileListStorage(AbstractListStorage):
@@ -178,67 +181,61 @@ class FileListStorage(AbstractListStorage):
         self.cache_dir = Path(self.cache_dir) if isinstance(self.cache_dir, str) else self.cache_dir
         self.file_path = self.cache_dir / filename
         super().__init__(serializer)
-        self.serializer = self.serializer or settings.serializer
+        self.serializer = self.serializer or settings.SERIALIZER
         self.loop = loop or asyncio.get_event_loop()
-        self.cache_dir.mkdir(exist_ok=True)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.file_path.touch(exist_ok=True)
         self.refresh()
 
-    def _get_storage_items(self) -> List[str]:
-        with self.file_path.open() as f:
+    def _get_storage_items(self) -> List[bytes]:
+        with self.file_path.open('rb') as f:
             return f.readlines()
 
-    def _set_storage_item(self, item: str) -> None:
-        with self.file_path.open('a') as f:
-            f.write(f'{item}\n')
+    def _set_storage_item(self, item: bytes) -> None:
+        with self.file_path.open('ab') as f:
+            f.writelines([item])
 
-    def _set_storage_items(self, items: str) -> None:
-        with self.file_path.open('a') as f:
+    def _set_storage_items(self, items: Iterator[bytes]) -> None:
+        with self.file_path.open('ab') as f:
             f.writelines(items)
-
-    def erase_from(self, index: int):
-        new_cache = self._cache[:index-1]
-        with self.file_path.open('a') as f:
-            f.writelines(map(self.serializer.pack, new_cache))
-        self._cache = new_cache
 
 
 class FilePersistentState(FileDictStorage):
     def __init__(
             self,
-            node_id: str,
+            server_id: str,
             cache_dir: Optional[Union[str, Path]] = None,
             serializer: Optional[AbstractSerializer] = None,
             loop: Optional[asyncio.AbstractEventLoop] = None
     ):
-        super().__init__(f'{node_id}.state', cache_dir=cache_dir, serializer=serializer, loop=loop)
+        super().__init__(filename=f'{server_id}.state', cache_dir=cache_dir, serializer=serializer, loop=loop)
 
     @property
     def current_term(self) -> int:
-        return self['current_term']
+        return self.get('current_term')
 
     @current_term.setter
     def current_term(self, value: int):
-        self['current_term'] = value
+        self.set('current_term', value)
 
     @property
     def voted_for(self) -> Union[str, int, None]:
-        return self['voted_for']
+        return self.get('voted_for')
 
     @voted_for.setter
     def voted_for(self, value: Union[str, int]):
-        self['voted_for'] = value
+        self.set('voted_for', value)
 
 
 class FilePersistentLog(FileListStorage):
     def __init__(
             self,
-            node_id: str,
+            server_id: str,
             cache_dir: Optional[Union[str, Path]] = None,
             serializer: Optional[AbstractSerializer] = None,
             loop: Optional[asyncio.AbstractEventLoop] = None
     ):
-        super().__init__(f'{node_id}.log', cache_dir=cache_dir, serializer=serializer, loop=loop)
+        super().__init__(filename=f'{server_id}.log', cache_dir=cache_dir, serializer=serializer, loop=loop)
 
         self.commit_index = 0
         self.last_applied = 0
@@ -261,11 +258,21 @@ class FilePersistentLog(FileListStorage):
 
 
 class StateMachine(AbstractDictStorage):
+    def __init__(self, apply_handler: Optional[Callable[['StateMachine', Dict[str, Any]], None]] = None):
+        super().__init__()
+        self.apply_handler = apply_handler
+
     def _get_storage_content(self) -> Dict:
-        return self._cache
+        return super()._get_storage_content()
 
     def _set_storage_content(self, content: Dict) -> None:
-        ...
+        super()._set_storage_content(content)
 
     def apply(self, command: Dict[str, Any]) -> None:
-        self.update(command)
+        if callable(self.apply_handler):
+            if asyncio.iscoroutinefunction(self.apply_handler):
+                asyncio.ensure_future(self.apply_handler(self, command))
+            else:
+                self.apply_handler(self, command)
+        else:
+            self.update(command)

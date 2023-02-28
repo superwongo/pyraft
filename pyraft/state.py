@@ -11,7 +11,7 @@ import random
 import asyncio
 import functools
 from abc import ABCMeta, abstractmethod
-from typing import Union, Dict, Type, Callable, Tuple, Optional, List
+from typing import Union, Dict, Type, Callable, Tuple, Optional, List, Any
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 
@@ -28,7 +28,7 @@ THREAD_POOL_EXECUTOR = ThreadPoolExecutor()
 def validate_term(func):
     @functools.wraps(func)
     def wrapped(
-            self: BaseRole,
+            self: 'BaseRole',
             data: Union[RequestVote, RequestVoteResponse, AppendEntries, AppendEntriesResponse],
             sender: Tuple[str, int]
     ):
@@ -59,7 +59,7 @@ def validate_term(func):
 def validate_commit_index(func):
     @functools.wraps(func)
     def wrapped(
-            self: BaseRole,
+            self: 'BaseRole',
             data: Union[RequestVote, RequestVoteResponse, AppendEntries, AppendEntriesResponse],
             sender: Tuple[str, int]
     ):
@@ -79,6 +79,16 @@ def validate_commit_index(func):
     return wrapped
 
 
+def leader_required(func):
+    @functools.wraps(func)
+    async def wrapped(cls: 'State', *args, **kwargs):
+        await cls.wait_for_election_success()
+        if not isinstance(cls.leader, Leader):
+            raise RuntimeError(f'选举出的leader[{cls.leader}]异常')
+        return await func(cls, *args, **kwargs)
+    return wrapped
+
+
 class State:
     loop: Optional[asyncio.AbstractEventLoop] = None
 
@@ -88,17 +98,19 @@ class State:
     wait_until_leader_id: Optional[str] = None
     wait_until_leader_future: Optional[asyncio.Future] = None
 
-    on_follower_callback: Optional[Callable] = None
-    on_candidate_callback: Optional[Callable] = None
-    on_leader_callback: Optional[Callable] = None
+    state_apply_handler: Optional[Callable[[Dict[str, Any]], None]] = None
 
-    def __init__(self, node):
-        self.node = node
-        self.__class__.loop = self.node.loop
+    on_follower_callback: Optional[Callable[['Follower'], None]] = None
+    on_candidate_callback: Optional[Callable[['Candidate'], None]] = None
+    on_leader_callback: Optional[Callable[['Leader'], None]] = None
+
+    def __init__(self, server):
+        self.server = server
+        self.__class__.loop = self.server.loop
 
         self.storage = FilePersistentState(self.id, loop=self.loop)
         self.log = FilePersistentLog(self.id, loop=self.loop)
-        self.state_machine = StateMachine()
+        self.state_machine = StateMachine(self.__class__.state_apply_handler)
 
         self.role = Follower(self)
 
@@ -109,12 +121,12 @@ class State:
         self.role.stop()
 
     @staticmethod
-    def get_node_id(host: str, port: int) -> str:
+    def get_server_id(host: str, port: int) -> str:
         return f'{host}:{port}'
 
     @property
     def id(self) -> str:
-        return self.get_node_id(self.node.host, self.node.port)
+        return self.get_server_id(self.server.host, self.server.port)
 
     def _change_role(self, new_role: Type['BaseRole']):
         self.role.stop()
@@ -135,41 +147,56 @@ class State:
         if cls.wait_until_leader_id and (
             cls.wait_until_leader_future and not cls.wait_until_leader_future.done()
         ) and self.leader_id == cls.wait_until_leader_id:
-            # We release the future when specific node becomes a leader
             cls.wait_until_leader_future.set_result(cls.leader)
 
-    def add_follower_listener(self, callback: Callable[[Type['BaseRole']], None]):
-        self.__class__.on_follower_callback = callback
+    @classmethod
+    def add_state_apply_handler(cls, handler: Optional[Callable[[Dict[str, Any]], None]]):
+        cls.state_apply_handler = handler
 
-    def add_candidate_listener(self, callback: Callable):
-        self.__class__.on_candidate_callback = callback
+    @classmethod
+    def add_follower_listener(cls, callback: Callable[['Follower'], None]):
+        cls.on_follower_callback = callback
 
-    def add_header_listener(self, callback: Callable):
-        self.__class__.on_header_callback = callback
+    @classmethod
+    def add_candidate_listener(cls, callback: Callable[['Candidate'], None]):
+        cls.on_candidate_callback = callback
+
+    @classmethod
+    def add_leader_listener(cls, callback: Callable[['Leader'], None]):
+        cls.on_leader_callback = callback
 
     def to_follower(self):
         self._change_role(Follower)
         self.set_leader(None)
-        if self.__class__.on_follower_callback:
-            self.__class__.on_follower_callback(self.role)
+        if callable(self.__class__.on_follower_callback):
+            if asyncio.iscoroutinefunction(self.__class__.on_follower_callback):
+                asyncio.ensure_future(self.__class__.on_follower_callback(self.role), loop=self.loop)
+            else:
+                self.__class__.on_follower_callback(self.role)
 
     def to_candidate(self):
         self._change_role(Candidate)
         self.set_leader(None)
-        if self.__class__.on_candidate_callback:
-            self.__class__.on_candidate_callback(self.role)
+        if callable(self.__class__.on_candidate_callback):
+            if asyncio.iscoroutinefunction(self.__class__.on_candidate_callback):
+                asyncio.ensure_future(self.__class__.on_candidate_callback(self.role), loop=self.loop)
+            else:
+                self.__class__.on_candidate_callback(self.role)
 
     def to_leader(self):
         self._change_role(Leader)
         self.set_leader(self.role)
-        if self.__class__.on_leader_callback:
-            self.__class__.on_leader_callback(self.role)
+        if callable(self.__class__.on_leader_callback):
+            if asyncio.iscoroutinefunction(self.__class__.on_leader_callback):
+                asyncio.ensure_future(self.__class__.on_leader_callback(self.role), loop=self.loop)
+            else:
+                self.__class__.on_leader_callback(self.role)
 
     def send(self, data: Dict, dest: Union[str, Tuple[str, int]]):
-        asyncio.ensure_future(self.node.send(data, dest))
+        asyncio.ensure_future(self.server.send(data, dest), loop=self.loop)
 
     def broadcast(self, data: Dict):
-        asyncio.ensure_future(self.node.broadcast(data))
+        asyncio.ensure_future(self.server.broadcast(data), loop=self.loop)
 
     def request_handler(self, data: Dict, sender: Tuple[str, int]):
         request_type = data.get('type')
@@ -178,14 +205,46 @@ class State:
         dc = getattr(rpc_request_mapping, request_type)
         handler = getattr(self.role, f'on_receive_{request_type}', None)
         if handler:
-            asyncio.ensure_future(self.loop.run_in_executor(THREAD_POOL_EXECUTOR, handler, dc(**data), sender))
+            handler(dc(**data), sender)
 
     def is_majority(self, count: int) -> bool:
-        return count > (len(self.node.cluster) // 2)
+        return count > (len(self.server.cluster) // 2)
 
     @property
     def cluster(self) -> List[str]:
-        return [self.get_node_id(*follower) for follower in self.node.cluster]
+        return [self.get_server_id(*follower) for follower in self.server.cluster]
+
+    @classmethod
+    def get_leader(cls):
+        return cls.leader.id if isinstance(cls.leader, Leader) else cls.leader
+
+    @classmethod
+    async def wait_for_election_success(cls):
+        if cls.leader:
+            cls.leader_future = asyncio.Future(loop=cls.loop)
+            await cls.leader_future
+            cls.leader_future = None
+
+    @classmethod
+    async def wait_until_leader(cls, server_id: str):
+        if not server_id:
+            raise ValueError('节点ID不可为空')
+        if cls.get_leader() != server_id:
+            cls.wait_until_leader_id = server_id
+            cls.wait_until_leader_future = asyncio.Future(loop=cls.loop)
+            await cls.wait_until_leader_future
+            cls.wait_until_leader_id = None
+            cls.wait_until_leader_future = None
+
+    @classmethod
+    @leader_required
+    async def get_value(cls, name: str) -> Any:
+        return cls.leader.state_machine[name]
+
+    @classmethod
+    @leader_required
+    async def set_value(cls, name: str, value: Any):
+        await cls.leader.execute_command({name: value})
 
 
 class BaseRole(metaclass=ABCMeta):
@@ -270,14 +329,6 @@ class Follower(BaseRole):
     def on_receive_append_entries(self, data: AppendEntries, sender: Tuple[str, int]):
         self.state.set_leader(data.leader_id)
 
-        # 添加日志条目判断逻辑：
-        # 1.若follower（本服务）最新日志索引等于leader的上一日志索引，则；判断follower上一日志索引对应的任期是否与leader一致：
-        #   1.1.若一致，则直接进行新日志写入操作；
-        #   1.2.若不一致，则返回写入失败，让leader降低上一日志索引重新同步；
-        # 2.若follower（本服务）最新日志索引大于leader的上一日志索引，则判断follower上一日志索引对应的任期是否与leader一致：
-        #   2.1.若一致，则清除后续日志，进行重新写入操作；
-        #   2.2.若不一致，则返回写入失败，让leader降低上一日志索引重新同步；
-        # 3.若follower（本服务）最新日志索引小于leader的上一日志索引，则需要返回写入失败，让leader降低上一日志索引重新同步。
         if self.log.last_log_index < data.prev_log_index \
                 or (data.prev_log_index and self.log[data.prev_log_index]['term'] != data.prev_log_term):
             response = AppendEntriesResponse(
@@ -392,12 +443,12 @@ class Leader(BaseRole):
 
     def heartbeat(self):
         self.request_id += 1
-        asyncio.ensure_future(self.loop.run_in_executor(THREAD_POOL_EXECUTOR, self.rpc_append_entries))
+        asyncio.ensure_future(self.loop.run_in_executor(THREAD_POOL_EXECUTOR, self.rpc_append_entries), loop=self.loop)
 
-    def rpc_append_entries(self, node_id: Optional[str] = None):
-        node_id_list = [node_id] if node_id else self.state.cluster
-        for node_id in node_id_list:
-            next_index = self.log.next_index[node_id]
+    def rpc_append_entries(self, server_id: Optional[str] = None):
+        server_id_list = [server_id] if server_id else self.state.cluster
+        for server_id in server_id_list:
+            next_index = self.log.next_index[server_id]
             prev_index = next_index - 1
             entries = self.log.get_items(next_index, next_index + settings.APPEND_ENTRIES_MAX_NUM) \
                 if self.log.last_log_index >= next_index else []
@@ -410,12 +461,12 @@ class Leader(BaseRole):
                 leader_commit=self.log.commit_index,
                 request_id=self.request_id
             )
-            self.state.send(request.to_dict(), node_id)
+            self.state.send(request.to_dict(), server_id)
 
     @validate_commit_index
     @validate_term
     def on_receive_append_entries_response(self, data: AppendEntriesResponse, sender: Tuple[str, int]):
-        sender_id = self.state.get_node_id(*sender)
+        sender_id = self.state.get_server_id(*sender)
         self.response_mapping[data.request_id].add(sender_id)
         if self.state.is_majority(len(self.response_mapping) + 1):
             self.step_down_timer.reset()

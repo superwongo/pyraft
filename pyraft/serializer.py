@@ -28,16 +28,16 @@ class AbstractSerializer(metaclass=ABCMeta):
 
 
 class JsonSerializer(AbstractSerializer):
-    def pack(self, data: Dict) -> str:
-        return json.dumps(data)
+    def pack(self, data: Dict) -> bytes:
+        return json.dumps(data).encode(self.encoding)
 
-    def unpack(self, data: str) -> Dict:
+    def unpack(self, data: bytes) -> Dict:
         return json.loads(data)
 
 
 class MsgPackSerializer(AbstractSerializer):
-    def pack(self, data: Dict) -> str:
+    def pack(self, data: Dict) -> bytes:
         return msgpack.packb(data, use_bin_type=True)
 
-    def unpack(self, data: str) -> Dict:
-        return msgpack.unpackb(data.encode(self.encoding), use_list=True, encoding=self.encoding)
+    def unpack(self, data: bytes) -> Dict:
+        return msgpack.unpackb(data, use_list=True)

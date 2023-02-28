@@ -32,7 +32,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
         self.loop = loop or asyncio.get_event_loop()
         self.cryptor_enabled = cryptor_enabled or settings.CRYPTOR_ENABLED
         self.cryptor = cryptor or settings.CRYPTOR
-        self.transport = None
+        self.transport: Optional[asyncio.DatagramTransport] = None
 
     def __call__(self):
         return self
@@ -44,16 +44,15 @@ class UDPProtocol(asyncio.DatagramProtocol):
                 data = self.serializer.pack(data)
             if self.cryptor_enabled and self.cryptor:
                 data = self.cryptor.encrypt(data)
-            await self.transport.sendto(data, *dest)
+            self.transport.sendto(data, dest)
 
     def connection_made(self, transport: asyncio.DatagramTransport) -> None:
         self.transport = transport
         asyncio.ensure_future(self.start(), loop=self.loop)
 
     def datagram_received(self, data: bytes, addr: Tuple[str, int]) -> None:
-        data = data.decode('utf-8')
         if self.cryptor_enabled and self.cryptor:
-            data = self.cryptor.decrypt(data)
+            data = self.cryptor.decrypt(data.decode('utf-8'))
         if self.serializer:
             data = self.serializer.unpack(data)
         self.request_handler(data, addr)
