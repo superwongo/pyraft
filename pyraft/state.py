@@ -17,7 +17,8 @@ from collections import defaultdict
 
 from pyraft.storage import FilePersistentState, FilePersistentLog, StateMachine
 from pyraft.timer import Timer
-from pyraft.config import settings, rpc_request_mapping, LogEntry, RequestVote, RequestVoteResponse, AppendEntries, \
+from pyraft.config import settings
+from pyraft.schema import rpc_request_mapping, LogEntry, RequestVote, RequestVoteResponse, AppendEntries, \
     AppendEntriesResponse
 
 
@@ -275,8 +276,8 @@ class Follower(BaseRole):
         #   1.2.若不一致，则返回写入失败，让leader降低上一日志索引重新同步；
         # 2.若follower（本服务）最新日志索引大于leader的上一日志索引，则判断follower上一日志索引对应的任期是否与leader一致：
         #   2.1.若一致，则清除后续日志，进行重新写入操作；
-        #   2.2.若不一致，则返回写入失败，让leader降低上一日志索引重新同步。
-        # 3.若follower（本服务）最新日志索引小于leader的上一日志索引，则需要返回写入失败，让leader降低上一日志索引重新同步；
+        #   2.2.若不一致，则返回写入失败，让leader降低上一日志索引重新同步；
+        # 3.若follower（本服务）最新日志索引小于leader的上一日志索引，则需要返回写入失败，让leader降低上一日志索引重新同步。
         if self.log.last_log_index < data.prev_log_index \
                 or (data.prev_log_index and self.log[data.prev_log_index]['term'] != data.prev_log_term):
             response = AppendEntriesResponse(
@@ -414,7 +415,37 @@ class Leader(BaseRole):
     @validate_commit_index
     @validate_term
     def on_receive_append_entries_response(self, data: AppendEntriesResponse, sender: Tuple[str, int]):
-        ...
+        sender_id = self.state.get_node_id(*sender)
+        self.response_mapping[data.request_id].add(sender_id)
+        if self.state.is_majority(len(self.response_mapping) + 1):
+            self.step_down_timer.reset()
+            del self.response_mapping[data.request_id]
+
+        if data.success:
+            self.log.next_index[sender_id] = self.log.last_log_index + 1
+            self.log.match_index[sender_id] = self.log.last_log_index
+            self.update_commit_index()
+        else:
+            next_index = self.log.next_index[sender_id]
+            prev_index = next_index - 1
+            if prev_index > data.last_log_index:
+                self.log.next_index = data.last_log_index + 1
+            else:
+                self.log.next_index = min(self.log.next_index - 1, 1)
+
+        if self.log.last_log_index >= self.log.next_index[sender_id]:
+            self.rpc_append_entries(sender_id)
+
+    def update_commit_index(self):
+        committed_on_majority = 0
+        for index in range(self.log.commit_index + 1, self.log.last_log_index + 1):
+            committed_count = len([filter(lambda x: x >= index, self.log.match_index.values())])
+            if self.state.is_majority(committed_count + 1) and self.log[index]['term'] == self.storage.current_term:
+                committed_on_majority = index
+            else:
+                break
+        if committed_on_majority > self.log.commit_index:
+            self.log.commit_index = committed_on_majority
 
     async def execute_command(self, command):
         apply_future = asyncio.Future(loop=self.loop)

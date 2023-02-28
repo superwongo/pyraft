@@ -14,7 +14,8 @@ from pathlib import Path
 from collections import defaultdict
 
 from pyraft.serializer import AbstractSerializer
-from pyraft.config import settings, LogEntry
+from pyraft.config import settings
+from pyraft.schema import LogEntry
 
 __all__ = ('AbstractDictStorage', 'AbstractListStorage', 'FilePersistentState', 'FilePersistentLog', 'StateMachine')
 

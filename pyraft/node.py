@@ -8,7 +8,7 @@
 """
 
 import asyncio
-from typing import Optional, Union, Dict, Tuple, Any, Set, Iterator
+from typing import Optional, Union, Dict, Tuple, Any, Set
 
 from pyraft.state import State
 from pyraft.network import UDPProtocol
@@ -19,7 +19,7 @@ class Node:
         self.host = host
         self.port = port
         self.loop = loop or asyncio.get_event_loop()
-        self.cluster: Set[Iterator[str, int]] = set()
+        self.cluster: Set[Tuple[str, int]] = set()
         self.state = State(self)
         self.requests = asyncio.Queue(loop=self.loop)
         self.transport = None
@@ -34,7 +34,7 @@ class Node:
         self.transport.close()
 
     def update_cluster(self, host: str, port: int):
-        self.cluster.update((host, port))
+        self.cluster.add((host, port))
 
     def request_handler(self, data: Dict, sender: Tuple[str, int]) -> None:
         self.state.request_handler(data, sender)
