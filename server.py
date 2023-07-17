@@ -11,20 +11,29 @@ import asyncio
 
 from pyraft.run import start, stop
 from pyraft.state import State
+from pyraft.log import logger
 
 
-async def main(index, loop=None):
-    await start(
-        servers='10.201.38.14:8091,10.201.38.14:8092,10.201.38.14:8093', current_server_index=index or 0,
+LOCAL_IP = '127.0.0.1'
+
+
+async def main(index):
+    asyncio.ensure_future(start(
+        servers=f'{LOCAL_IP}:8091,{LOCAL_IP}:8092,{LOCAL_IP}:8093', current_server_index=index or 0,
         loop=loop
-    )
+    ))
     while True:
-        await asyncio.sleep(5, loop=loop)
+        server_id = State.get_server_id(LOCAL_IP, 8091 if index == 0 else 8092 if index == 1 else 8093)
 
-        if (index == 0 and State.get_leader() == State.get_server_id('10.201.38.14', 8091)) \
-                or (index == 1 and State.get_leader() == State.get_server_id('10.201.38.14', 8092)) \
-                or (index == 2 and State.get_leader() == State.get_server_id('10.201.38.14', 8093)):
-            await State.set_value('test', '123')
+        await State.wait_until_leader(server_id)
+
+        await asyncio.sleep(5)
+
+        if State.get_leader() == server_id:
+            from datetime import datetime
+            t = datetime.now().timestamp()
+            logger.debug(f'准备设置参数[test]，值为{t}')
+            await State.set_value('test', t)
 
 
 if __name__ == '__main__':
@@ -34,6 +43,6 @@ if __name__ == '__main__':
     args = parser.parse_args()
     try:
         loop = asyncio.get_event_loop()
-        loop.run_until_complete(main(args.index, loop=loop))
+        loop.run_until_complete(main(args.index))
     except KeyboardInterrupt:
         stop()

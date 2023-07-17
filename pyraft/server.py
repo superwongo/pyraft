@@ -8,7 +8,7 @@
 """
 
 import asyncio
-from typing import Optional, Union, Dict, Tuple, Any, Set, Callable
+from typing import Optional, Union, Dict, Tuple, Any, Set, Callable, ByteString
 
 from pyraft.state import State, Follower, Candidate, Leader
 from pyraft.network import UDPProtocol
@@ -23,7 +23,7 @@ class Server:
         self.port = port
         self.loop = loop or asyncio.get_event_loop()
         self.cluster: Set[Tuple[str, int]] = set()
-        self.requests = asyncio.Queue(loop=self.loop)
+        self.requests = asyncio.Queue()
         self.state: Optional[State] = None
         self.transport: Optional[asyncio.DatagramTransport] = None
         self.__class__.servers.add(self)
@@ -31,8 +31,12 @@ class Server:
     async def start(self):
         protocol = UDPProtocol(self.requests, self.request_handler, loop=self.loop)
         self.transport, _ = await self.loop.create_datagram_endpoint(protocol, local_addr=(self.host, self.port))
-        self.state = State(self)
-        self.state.start()
+
+        def start_state():
+            self.state = State(self)
+            self.state.start()
+
+        self.loop.call_soon(start_state)
 
     def stop(self):
         self.state.stop()
@@ -41,18 +45,18 @@ class Server:
     def update_cluster(self, host: str, port: int):
         self.cluster.add((host, port))
 
-    def request_handler(self, data: Dict, sender: Tuple[str, int]) -> None:
+    def request_handler(self, data: ByteString, sender: Tuple[str, int]) -> None:
         self.state.request_handler(data, sender)
 
-    async def send(self, data: Any, dest: Union[str, Tuple[str, int]]):
+    async def send(self, data: ByteString, dest: Union[str, Tuple[str, int]]):
         if isinstance(dest, str):
             host, port = dest.split(':')
             dest = (host, int(port))
         await self.requests.put((data, dest))
 
-    async def broadcast(self, data: Any):
+    async def broadcast(self, data: ByteString):
         tasks = [self.send(data, dest) for dest in self.cluster]
-        await asyncio.gather(*tasks, loop=self.loop)
+        await asyncio.gather(*tasks)
 
     @staticmethod
     def add_state_apply_handler(handler: Optional[Callable[[StateMachine, Dict[str, Any]], None]]):

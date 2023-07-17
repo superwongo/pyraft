@@ -8,7 +8,7 @@
 """
 
 import asyncio
-from typing import Union, Optional, Callable, Dict, Tuple
+from typing import Union, Optional, Callable, Dict, Tuple, ByteString
 
 from pyraft.crypto import AbstractCryptor
 from pyraft.config import settings
@@ -20,7 +20,7 @@ class UDPProtocol(asyncio.DatagramProtocol):
     def __init__(
             self,
             queue: asyncio.Queue,
-            request_handler: Callable[[Dict, Tuple[str, int]], None],
+            request_handler: Callable[[ByteString, Tuple[str, int]], None],
             serializer: Optional[AbstractSerializer] = None,
             loop: Optional[asyncio.AbstractEventLoop] = None,
             cryptor_enabled: Optional[bool] = False,

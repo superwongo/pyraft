@@ -13,3 +13,10 @@ __all__ = ('logger',)
 
 
 logger = logging.getLogger('raft')
+# 日志级别：DEBUG|INFO|WARNING|ERROR
+logger.setLevel('DEBUG')
+handler = logging.StreamHandler()
+handler.setFormatter(
+    logging.Formatter('%(asctime)s | %(levelname)-8s | %(module)s:%(funcName)s:%(lineno)d - %(message)s')
+)
+logger.addHandler(handler)

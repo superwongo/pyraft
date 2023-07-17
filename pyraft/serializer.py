@@ -8,6 +8,7 @@
 """
 
 import json
+import base64
 from abc import ABCMeta, abstractmethod
 from typing import Optional, AnyStr, Dict
 
@@ -37,7 +38,7 @@ class JsonSerializer(AbstractSerializer):
 
 class MsgPackSerializer(AbstractSerializer):
     def pack(self, data: Dict) -> bytes:
-        return msgpack.packb(data, use_bin_type=True)
+        return base64.b64encode(msgpack.packb(data, use_bin_type=True))
 
     def unpack(self, data: bytes) -> Dict:
-        return msgpack.unpackb(data, use_list=True)
+        return msgpack.unpackb(base64.b64decode(data), use_list=True)

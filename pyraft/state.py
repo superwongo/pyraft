@@ -11,13 +11,14 @@ import random
 import asyncio
 import functools
 from abc import ABCMeta, abstractmethod
-from typing import Union, Dict, Type, Callable, Tuple, Optional, List, Any
+from typing import Union, Dict, Type, Callable, Tuple, Optional, List, Any, ByteString
 from concurrent.futures import ThreadPoolExecutor
 from collections import defaultdict
 
-from pyraft.storage import FilePersistentState, FilePersistentLog, StateMachine
+from pyraft.storage import StateStorage, LogsStorage, StateMachine
 from pyraft.timer import Timer
 from pyraft.config import settings
+from pyraft.log import logger
 from pyraft.schema import rpc_request_mapping, LogEntry, RequestVote, RequestVoteResponse, AppendEntries, \
     AppendEntriesResponse
 
@@ -28,49 +29,52 @@ THREAD_POOL_EXECUTOR = ThreadPoolExecutor()
 def validate_term(func):
     @functools.wraps(func)
     def wrapped(
-            self: 'BaseRole',
+            role: 'BaseRole',
             data: Union[RequestVote, RequestVoteResponse, AppendEntries, AppendEntriesResponse],
             sender: Tuple[str, int]
     ):
-        if data.term > self.storage.current_term:
-            self.storage.current_term = data.term
-            if not isinstance(self, Follower):
+        if data.term > role.storage.current_term:
+            role.storage.current_term = data.term
+            if not isinstance(role, Follower):
                 # TODO 需要测试变更为follower后，是否会执行新的follower的func
-                self.state.to_follower()
-        elif data.term < self.storage.current_term:
+                role.state.to_follower()
+        elif data.term < role.storage.current_term:
             if isinstance(data, RequestVote):
-                response = RequestVoteResponse(term=self.storage.current_term, vote_granted=False)
-                self.state.send(response.to_dict(), sender)
+                response = RequestVoteResponse(term=role.storage.current_term, vote_granted=False)
+                role.state.send(response.to_dict(), sender)
                 return
             elif isinstance(data, AppendEntries):
                 response = AppendEntriesResponse(
-                    term=self.storage.current_term,
+                    term=role.storage.current_term,
                     success=False,
-                    last_log_index=self.log.last_log_index,
-                    last_log_term=self.log.last_log_term,
+                    last_log_index=role.log.last_log_index,
+                    last_log_term=role.log.last_log_term,
                     request_id=data.request_id
                 )
-                self.state.send(response.to_dict(), sender)
+                role.state.send(response.to_dict(), sender)
                 return
-        return func(self, data, sender)
+        return func(role, data, sender)
     return wrapped
 
 
 def validate_commit_index(func):
     @functools.wraps(func)
     def wrapped(
-            self: 'BaseRole',
+            role: 'BaseRole',
             data: Union[RequestVote, RequestVoteResponse, AppendEntries, AppendEntriesResponse],
             sender: Tuple[str, int]
     ):
-        result = func(self, data, sender)
-        if self.log.commit_index > self.log.last_applied:
-            for not_applied in range(self.log.last_applied + 1, self.log.commit_index + 1):
-                self.state_machine.apply(self.log[not_applied]['command'])
-                self.log.last_applied += 1
-                if isinstance(self, Leader) and not_applied in self.apply_future_dict:
+        result = func(role, data, sender)
+        if role.log.commit_index > role.log.last_applied:
+            for not_applied in range(role.log.last_applied + 1, role.log.commit_index + 1):
+                role.state_machine.apply(role.log[not_applied]['command'])
+                if isinstance(role, Leader):
+                    logger.debug(f'>>>>>>>apply_future_dict: {role.apply_future_dict.keys()}')
+                role.log.last_applied += 1
+                if isinstance(role, Leader) and not_applied in role.apply_future_dict:
+                    logger.debug(f'日志序列[{not_applied}]已提交')
                     try:
-                        apply_future: asyncio.Future = self.apply_future_dict.pop(not_applied)
+                        apply_future: asyncio.Future = role.apply_future_dict.pop(not_applied)
                         if not apply_future.done():
                             apply_future.set_result(not_applied)
                     except (asyncio.futures.InvalidStateError, AttributeError):
@@ -108,8 +112,8 @@ class State:
         self.server = server
         self.__class__.loop = self.server.loop
 
-        self.storage = FilePersistentState(self.id, loop=self.loop)
-        self.log = FilePersistentLog(self.id, loop=self.loop)
+        self.storage = StateStorage(self.id)
+        self.log = LogsStorage(self.id)
         self.state_machine = StateMachine(self.__class__.state_apply_handler)
 
         self.role = Follower(self)
@@ -193,12 +197,15 @@ class State:
                 self.__class__.on_leader_callback(self.role)
 
     def send(self, data: Dict, dest: Union[str, Tuple[str, int]]):
+        data = self.log.serializer.pack(data)
         asyncio.ensure_future(self.server.send(data, dest), loop=self.loop)
 
     def broadcast(self, data: Dict):
+        data = self.log.serializer.pack(data)
         asyncio.ensure_future(self.server.broadcast(data), loop=self.loop)
 
-    def request_handler(self, data: Dict, sender: Tuple[str, int]):
+    def request_handler(self, data: ByteString, sender: Tuple[str, int]):
+        data = self.log.serializer.unpack(data)
         request_type = data.get('type')
         if not request_type or not hasattr(rpc_request_mapping, request_type):
             return
@@ -220,7 +227,7 @@ class State:
 
     @classmethod
     async def wait_for_election_success(cls):
-        if cls.leader:
+        if cls.leader is None:
             cls.leader_future = asyncio.Future(loop=cls.loop)
             await cls.leader_future
             cls.leader_future = None
@@ -245,6 +252,7 @@ class State:
     @leader_required
     async def set_value(cls, name: str, value: Any):
         await cls.leader.execute_command({name: value})
+        logger.debug(f'参数{name}已设置为{value}')
 
 
 class BaseRole(metaclass=ABCMeta):
@@ -345,7 +353,6 @@ class Follower(BaseRole):
             self.log.erase_from(data.prev_log_index)
 
         self.log.append_entries(data.entries)
-
         if data.leader_commit > self.log.commit_index:
             self.log.commit_index = min(data.leader_commit, self.log.last_log_index)
 
@@ -425,6 +432,7 @@ class Leader(BaseRole):
         self.step_down_timer = Timer(settings.STEP_DOWN_INTERVAL, self.state.to_follower)
         self.request_id = 0
         self.response_mapping = defaultdict(set)
+        # TODO 需要增加异常超时自动清除机制
         self.apply_future_dict = {}
 
     def start(self):
@@ -473,16 +481,17 @@ class Leader(BaseRole):
             del self.response_mapping[data.request_id]
 
         if data.success:
-            self.log.next_index[sender_id] = self.log.last_log_index + 1
-            self.log.match_index[sender_id] = self.log.last_log_index
+            if data.last_log_index > self.log.match_index[sender_id]:
+                self.log.next_index[sender_id] = self.log.last_log_index + 1
+                self.log.match_index[sender_id] = self.log.last_log_index
             self.update_commit_index()
         else:
             next_index = self.log.next_index[sender_id]
             prev_index = next_index - 1
             if prev_index > data.last_log_index:
-                self.log.next_index = data.last_log_index + 1
+                self.log.next_index[sender_id] = data.last_log_index + 1
             else:
-                self.log.next_index = min(self.log.next_index - 1, 1)
+                self.log.next_index[sender_id] = max(next_index - 1, 1)
 
         if self.log.last_log_index >= self.log.next_index[sender_id]:
             self.rpc_append_entries(sender_id)
@@ -494,7 +503,7 @@ class Leader(BaseRole):
             if self.state.is_majority(committed_count + 1) and self.log[index]['term'] == self.storage.current_term:
                 committed_on_majority = index
             else:
-                break
+                continue
         if committed_on_majority > self.log.commit_index:
             self.log.commit_index = committed_on_majority
 
@@ -503,6 +512,8 @@ class Leader(BaseRole):
         await self.loop.run_in_executor(
             THREAD_POOL_EXECUTOR, self.log.append_entry, LogEntry(term=self.storage.current_term, command=command)
         )
+        self.heartbeat_timer.reset()
         self.apply_future_dict[self.log.last_log_index] = apply_future
         await self.loop.run_in_executor(THREAD_POOL_EXECUTOR, self.rpc_append_entries)
         await apply_future
+        logger.debug(f'命令[{command}]已同步发送至其他节点')

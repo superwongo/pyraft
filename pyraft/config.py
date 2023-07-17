@@ -23,9 +23,9 @@ class Settings:
     LOG_PATH: Union[str, Path] = Path('~/.raft/.cache').expanduser()
     SERIALIZER: Optional[AbstractSerializer] = MsgPackSerializer()
 
-    HEARTBEAT_INTERVAL: float = 0.3
+    HEARTBEAT_INTERVAL: float = 3 * 0.01
     STEP_DOWN_MISSED_HEARTBEATS: int = 5
-    ELECTION_INTERVAL_SPREAD: int = 3
+    ELECTION_INTERVAL_SPREAD: int = 30
     STEP_DOWN_INTERVAL: Optional[float] = None
     ELECTION_INTERVAL: Optional[float] = None
 

@@ -10,6 +10,7 @@
 import asyncio
 from typing import Optional, Union, List, Tuple, Iterator, Dict, Any
 
+from pyraft.log import logger
 from pyraft.server import Server
 from pyraft.state import Leader, Follower, Candidate
 from pyraft.storage import StateMachine
@@ -35,20 +36,20 @@ def parser_server_str(
 
 
 def leader_listener(role: Leader):
-    print(f'当前服务切换为leader，ID为{role.id}')
+    logger.debug(f'当前服务切换为leader，ID为{role.id}')
 
 
 def follower_listener(role: Follower):
-    print(f'当前服务切换为follower，ID为{role.id}')
+    logger.debug(f'当前服务切换为follower，ID为{role.id}')
 
 
 def candidate_listener(role: Candidate):
-    print(f'当前服务切换为candidate，ID为{role.id}')
+    logger.debug(f'当前服务切换为candidate，ID为{role.id}')
 
 
 def state_apply_handler(state_machine: StateMachine, command: Dict[str, Any]):
-    state_machine.update({command})
-    print(f'已将命令[{command}]应用到状态机中，key: {command.keys()}')
+    state_machine.update(command)
+    logger.debug(f'已将命令[{command}]应用到状态机')
 
 
 async def start(

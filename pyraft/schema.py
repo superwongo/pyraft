@@ -54,7 +54,7 @@ class AppendEntries:
     leader_id: Union[str, int]
     prev_log_index: int
     prev_log_term: int
-    entries: List[LogEntry]
+    entries: list[LogEntry]
     leader_commit: int
     request_id: int
     type: Optional[str] = 'append_entries'
