@@ -7,7 +7,7 @@
 @time: 2023/2/28
 """
 
-from typing import Union, Optional, List, Dict, Any
+from typing import Union, Optional, Dict, Any
 from dataclasses import dataclass, asdict
 from collections import namedtuple
 

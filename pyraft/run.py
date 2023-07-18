@@ -8,12 +8,11 @@
 """
 
 import asyncio
-from typing import Optional, Union, List, Tuple, Iterator, Dict, Any
+from typing import Optional, Union, List, Tuple, Iterator
 
 from pyraft.log import logger
 from pyraft.server import Server
 from pyraft.state import Leader, Follower, Candidate
-from pyraft.storage import StateMachine
 
 
 def parser_server_str(
@@ -36,20 +35,15 @@ def parser_server_str(
 
 
 def leader_listener(role: Leader):
-    logger.debug(f'当前服务切换为leader，ID为{role.id}')
+    logger.info(f'当前服务切换为leader，ID为{role.id}')
 
 
 def follower_listener(role: Follower):
-    logger.debug(f'当前服务切换为follower，ID为{role.id}')
+    logger.info(f'当前服务切换为follower，ID为{role.id}')
 
 
 def candidate_listener(role: Candidate):
-    logger.debug(f'当前服务切换为candidate，ID为{role.id}')
-
-
-def state_apply_handler(state_machine: StateMachine, command: Dict[str, Any]):
-    state_machine.update(command)
-    logger.debug(f'已将命令[{command}]应用到状态机')
+    logger.info(f'当前服务切换为candidate，ID为{role.id}')
 
 
 async def start(
@@ -68,7 +62,6 @@ async def start(
     current_server.add_leader_listener(leader_listener)
     current_server.add_follower_listener(follower_listener)
     current_server.add_candidate_listener(candidate_listener)
-    current_server.add_state_apply_handler(state_apply_handler)
     await current_server.start()
 
 

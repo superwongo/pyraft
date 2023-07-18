@@ -7,11 +7,10 @@
 @time: 2023/2/17
 """
 
-import asyncio
 import sqlite3
 import traceback
 from abc import ABCMeta, abstractmethod
-from typing import Optional, Union, Dict, AnyStr, Any, List, Callable
+from typing import Optional, Union, Dict, AnyStr, Any, List
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
@@ -262,9 +261,8 @@ class LogsStorage(AbstractListStorage):
 
 
 class StateMachine(AbstractDictStorage):
-    def __init__(self, apply_handler: Optional[Callable[['StateMachine', Dict[str, Any]], None]] = None):
+    def __init__(self):
         self._cache = {}
-        self.apply_handler = apply_handler
 
     def get(self, key: str) -> Any:
         if key not in self._cache:
@@ -279,10 +277,4 @@ class StateMachine(AbstractDictStorage):
             self.set(key, value)
 
     def apply(self, command: Dict[str, Any]) -> None:
-        if callable(self.apply_handler):
-            if asyncio.iscoroutinefunction(self.apply_handler):
-                asyncio.ensure_future(self.apply_handler(self, command))
-            else:
-                self.apply_handler(self, command)
-        else:
-            self.update(command)
+        self.update(command)

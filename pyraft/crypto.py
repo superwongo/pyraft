@@ -41,46 +41,44 @@ class RSAKeyFormat(str, Enum):
 
 class AbstractCryptor(metaclass=ABCMeta):
     @abstractmethod
-    def encrypt(self, raw_text: str) -> str:
+    def encrypt(self, raw_text: bytes) -> bytes:
         ...
 
     @abstractmethod
-    def decrypt(self, enc_text: str) -> str:
+    def decrypt(self, enc_text: bytes) -> bytes:
         ...
 
 
 class AESCryptor(AbstractCryptor):
     """AES加解密"""
-    def __init__(self, key: str, mode=AES.MODE_EAX, encoding: str = 'utf8'):
-        self._key = base64.b64decode(key.encode(encoding))
+    def __init__(self, key: bytes, mode=AES.MODE_EAX):
+        self._key = base64.b64decode(key)
         self._mode = mode
-        self._encoding = encoding
 
-    def encrypt(self, raw_text: str):
+    def encrypt(self, raw_text: bytes) -> bytes:
         cipher = AES.new(self._key, self._mode)
-        ciphertext, tag = cipher.encrypt_and_digest(raw_text.encode(self._encoding))
+        ciphertext, tag = cipher.encrypt_and_digest(raw_text)
         file_out = BytesIO()
         [file_out.write(x) for x in (cipher.nonce, tag, ciphertext)]
-        return base64.b64encode(file_out.getvalue()).decode(self._encoding)
+        return base64.b64encode(file_out.getvalue())
 
-    def decrypt(self, enc_text: str):
+    def decrypt(self, enc_text: bytes) -> bytes:
         file_in = BytesIO(base64.b64decode(enc_text))
         nonce, tag, ciphertext = [file_in.read(x) for x in (16, 16, -1)]
 
         # let's assume that the key is somehow available again
         cipher = AES.new(self._key, self._mode, nonce)
         raw_text = cipher.decrypt_and_verify(ciphertext, tag)
-        return raw_text.decode(self._encoding)
+        return raw_text
 
 
 class RSACryptor(AbstractCryptor):
     """RSA加解密"""
     def __init__(
             self,
-            private_key: Optional[str] = None,
-            public_key: Optional[str] = None,
-            passphrase: Optional[str] = None,
-            encoding: str = 'utf8'
+            private_key: Optional[bytes] = None,
+            public_key: Optional[bytes] = None,
+            passphrase: Optional[str] = None
     ):
         self._private_key = private_key
         self._public_key = public_key
@@ -88,9 +86,8 @@ class RSACryptor(AbstractCryptor):
         self._public_key_obj = RSA.import_key(
             public_key or self._private_key_obj.public_key().export_key(), passphrase=passphrase
         )
-        self._encoding = encoding
 
-    def encrypt(self, raw_text: str, length: int = 200) -> str:
+    def encrypt(self, raw_text: bytes, length: int = 200) -> bytes:
         """公钥加密
         单次加密串的长度最大为：(key_size/8)-11
         1024bit的证书用100，2048bit的证书用200
@@ -99,11 +96,11 @@ class RSACryptor(AbstractCryptor):
             raise ValueError('加密操作时，public_key不可为空')
 
         cipher_rsa = PKCS1_OAEP.new(self._public_key_obj)
-        raw_text_bytes = raw_text.encode(self._encoding)
+        raw_text_bytes = raw_text
         enc_text_list = [cipher_rsa.encrypt(raw_text_bytes[i:i+length]) for i in range(0, len(raw_text_bytes), length)]
-        return base64.b64encode(b''.join(enc_text_list)).decode(self._encoding)
+        return base64.b64encode(b''.join(enc_text_list))
 
-    def decrypt(self, enc_text: str, length: int = 256) -> str:
+    def decrypt(self, enc_text: bytes, length: int = 256) -> bytes:
         """私钥解密
         1024bit的证书用128，2048bit的证书用256
         """
@@ -114,23 +111,23 @@ class RSACryptor(AbstractCryptor):
         cipher_rsa = PKCS1_OAEP.new(self._private_key_obj)
         enc_text_bytes = base64.b64decode(enc_text)
         raw_text_list = [cipher_rsa.decrypt(enc_text_bytes[i:i+length]) for i in range(0, len(enc_text_bytes), length)]
-        return b''.join(raw_text_list).decode(self._encoding)
+        return b''.join(raw_text_list)
 
-    def signature(self, text: str) -> str:
+    def signature(self, text: bytes) -> bytes:
         """私钥签名"""
         if not self._private_key_obj:
             raise ValueError('签名操作时，private_key不可为空')
         signer = PKCS1_PSS.new(self._private_key_obj)
-        digest = SHA256.new(text.encode(self._encoding))
+        digest = SHA256.new(text)
         sign = signer.sign(digest)
-        return base64.b64encode(sign).decode(self._encoding)
+        return base64.b64encode(sign)
 
-    def verify(self, text: str, signature: str) -> bool:
+    def verify(self, text: bytes, signature: bytes) -> bool:
         """公钥验签"""
         if not self._public_key_obj:
             raise ValueError('验签操作时，public_key不可为空')
         verifier = PKCS1_PSS.new(self._public_key_obj)
-        digest = SHA256.new(text.encode(self._encoding))
+        digest = SHA256.new(text)
         try:
             verifier.verify(digest, base64.b64decode(signature))
             return True
@@ -142,21 +139,19 @@ class HybridCryptor(AbstractCryptor):
     """Hybrid加解密"""
     def __init__(
             self,
-            private_key: Optional[str] = None,
-            public_key: Optional[str] = None,
+            private_key: Optional[bytes] = None,
+            public_key: Optional[bytes] = None,
             mode: Optional[int] = None,
-            passphrase: Optional[str] = None,
-            encoding: str = 'utf8'
+            passphrase: Optional[str] = None
     ):
         self._private_key = RSA.import_key(private_key, passphrase=passphrase) if private_key else None
         self._public_key = RSA.import_key(
             public_key or self._private_key.public_key().export_key(), passphrase=passphrase
         )
         self._mode = mode or AES.MODE_EAX
-        self._encoding = encoding
         self._session_key = get_random_bytes(16)
 
-    def encrypt(self, raw_text: str) -> str:
+    def encrypt(self, raw_text: bytes) -> bytes:
         if not self._public_key:
             raise ValueError('加密操作时，public_key不可为空')
 
@@ -164,12 +159,12 @@ class HybridCryptor(AbstractCryptor):
         enc_session_key = cipher_rsa.encrypt(self._session_key)
 
         cipher_aes = AES.new(self._session_key, self._mode)
-        ciphertext, tag = cipher_aes.encrypt_and_digest(raw_text.encode(self._encoding))
+        ciphertext, tag = cipher_aes.encrypt_and_digest(raw_text)
         file_out = BytesIO()
         [file_out.write(x) for x in (enc_session_key, cipher_aes.nonce, tag, ciphertext)]
-        return base64.b64encode(file_out.getvalue()).decode(self._encoding)
+        return base64.b64encode(file_out.getvalue())
 
-    def decrypt(self, enc_text: str) -> str:
+    def decrypt(self, enc_text: bytes) -> bytes:
         if not self._private_key:
             raise ValueError('加密操作时，private_key不可为空')
 
@@ -183,33 +178,31 @@ class HybridCryptor(AbstractCryptor):
 
         # Decrypt the data with the AES session key
         cipher_aes = AES.new(session_key, self._mode, nonce)
-        return cipher_aes.decrypt_and_verify(ciphertext, tag).decode(self._encoding)
+        return cipher_aes.decrypt_and_verify(ciphertext, tag)
 
 
-def generate_aes_key(num: int = 16, encoding: str = 'utf8') -> str:
-    return base64.b64encode(get_random_bytes(num)).decode(encoding)
+def generate_aes_key(num: int = 16) -> bytes:
+    return base64.b64encode(get_random_bytes(num))
 
 
 def generate_private_key(
         fmt: Optional[RSAKeyFormat] = None,
         passphrase: Optional[str] = None,
-        encoding: str = 'utf8'
-) -> str:
+) -> bytes:
     fmt = fmt or RSAKeyFormat.PEM
     key = RSA.generate(2048)
     encrypted_key = key.export_key(format=fmt.value, passphrase=passphrase, pkcs=8, protection="scryptAndAES128-CBC")
-    return encrypted_key.decode(encoding)
+    return encrypted_key
 
 
 def generate_rsa_keys(
         fmt: Optional[RSAKeyFormat] = None,
-        passphrase: Optional[str] = None,
-        encoding: str = 'utf8'
-) -> Tuple[str, str]:
+        passphrase: Optional[str] = None
+) -> Tuple[bytes, bytes]:
     fmt = fmt or RSAKeyFormat.PEM
     key = RSA.generate(2048)
     encrypted_key = key.export_key(format=fmt.value, passphrase=passphrase, pkcs=8, protection="scryptAndAES128-CBC")
-    return encrypted_key.decode('utf8'), key.publickey().export_key(format=fmt.value).decode(encoding)
+    return encrypted_key, key.publickey().export_key(format=fmt.value)
 
 
 def get_public_key_from_private(
@@ -228,7 +221,7 @@ def test_aes_encrypt():
     k = generate_aes_key()
     print(f'>>>>>k: {k}')
     aes = AESCryptor(k)
-    raw_text = '12345'
+    raw_text = b'12345'
     enc_text = aes.encrypt(raw_text)
     print(f'>>>>>enc_text: {enc_text}')
     raw_text = aes.decrypt(enc_text)
@@ -239,7 +232,7 @@ def test_rsa_encrypt():
     private_key, public_key = generate_rsa_keys()
     print(f'>>>>>private_key: {private_key}')
     print(f'>>>>>public_key: {public_key}')
-    raw_text = '123452222222222222222222222222222222222222222222222222222222222222222222222'
+    raw_text = b'123452222222222222222222222222222222222222222222222222222222222222222222222'
     rsa = RSACryptor(private_key, public_key)
     enc_text = rsa.encrypt(raw_text)
     print(f'>>>>>secret_text: {enc_text}')
@@ -251,7 +244,7 @@ def test_rsa_signature():
     private_key, public_key = generate_rsa_keys()
     print(f'>>>>>private_key: {private_key}')
     print(f'>>>>>public_key: {public_key}')
-    text = '123452222222222222222222222222222222222222222222222222222222222222222222222'
+    text = b'123452222222222222222222222222222222222222222222222222222222222222222222222'
     rsa = RSACryptor(private_key, public_key)
     signature = rsa.signature(text)
     print(f'>>>>>signature: {signature}')
@@ -262,7 +255,7 @@ def test_rsa_signature():
 def test_hybrid_encrypt():
     passphrase = 'abcde'
     private_key, public_key = generate_rsa_keys(passphrase=passphrase)
-    raw_text = '123452222222222222222222222222222222222222222222222222222222222222222222222'
+    raw_text = b'123452222222222222222222222222222222222222222222222222222222222222222222222'
     hybrid = HybridCryptor(private_key, public_key, passphrase=passphrase)
     enc_text = hybrid.encrypt(raw_text)
     print(f'>>>>>secret_text: {enc_text}')
@@ -305,6 +298,6 @@ pVAoDGFbbDOMH79EkJ3EVkr/ljElNP0Hjq+EOGVGX0AbXUf8tQAVfRPwaV3p6NYY
 if __name__ == '__main__':
     # test_aes_encrypt()
     # test_rsa_encrypt()
-    test_rsa_signature()
+    # test_rsa_signature()
     # test_hybrid_encrypt()
-    # test_private_to_public_key()
+    test_private_to_public_key()

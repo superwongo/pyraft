@@ -67,12 +67,12 @@ def validate_commit_index(func):
         result = func(role, data, sender)
         if role.log.commit_index > role.log.last_applied:
             for not_applied in range(role.log.last_applied + 1, role.log.commit_index + 1):
-                role.state_machine.apply(role.log[not_applied]['command'])
-                if isinstance(role, Leader):
-                    logger.debug(f'>>>>>>>apply_future_dict: {role.apply_future_dict.keys()}')
+                command = role.log[not_applied]['command']
+                role.state_machine.apply(command)
+                logger.debug(f'日志序列[{not_applied}]中command[{command}]已应用到状态机中')
                 role.log.last_applied += 1
                 if isinstance(role, Leader) and not_applied in role.apply_future_dict:
-                    logger.debug(f'日志序列[{not_applied}]已提交')
+                    logger.info(f'日志序列[{not_applied}]已提交')
                     try:
                         apply_future: asyncio.Future = role.apply_future_dict.pop(not_applied)
                         if not apply_future.done():
@@ -102,8 +102,6 @@ class State:
     wait_until_leader_id: Optional[str] = None
     wait_until_leader_future: Optional[asyncio.Future] = None
 
-    state_apply_handler: Optional[Callable[[Dict[str, Any]], None]] = None
-
     on_follower_callback: Optional[Callable[['Follower'], None]] = None
     on_candidate_callback: Optional[Callable[['Candidate'], None]] = None
     on_leader_callback: Optional[Callable[['Leader'], None]] = None
@@ -114,7 +112,7 @@ class State:
 
         self.storage = StateStorage(self.id)
         self.log = LogsStorage(self.id)
-        self.state_machine = StateMachine(self.__class__.state_apply_handler)
+        self.state_machine = StateMachine()
 
         self.role = Follower(self)
 
@@ -152,10 +150,6 @@ class State:
             cls.wait_until_leader_future and not cls.wait_until_leader_future.done()
         ) and self.leader_id == cls.wait_until_leader_id:
             cls.wait_until_leader_future.set_result(cls.leader)
-
-    @classmethod
-    def add_state_apply_handler(cls, handler: Optional[Callable[[Dict[str, Any]], None]]):
-        cls.state_apply_handler = handler
 
     @classmethod
     def add_follower_listener(cls, callback: Callable[['Follower'], None]):
@@ -198,11 +192,11 @@ class State:
 
     def send(self, data: Dict, dest: Union[str, Tuple[str, int]]):
         data = self.log.serializer.pack(data)
-        asyncio.ensure_future(self.server.send(data, dest), loop=self.loop)
+        self.server.send(data, dest)
 
     def broadcast(self, data: Dict):
         data = self.log.serializer.pack(data)
-        asyncio.ensure_future(self.server.broadcast(data), loop=self.loop)
+        self.server.broadcast(data)
 
     def request_handler(self, data: ByteString, sender: Tuple[str, int]):
         data = self.log.serializer.unpack(data)

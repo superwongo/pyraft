@@ -20,19 +20,19 @@ __all__ = ('settings',)
 
 @dataclass
 class Settings:
-    LOG_PATH: Union[str, Path] = Path('~/.raft/.cache').expanduser()
+    LOG_PATH: Union[str, Path] = Path('~/.raft').expanduser()
     SERIALIZER: Optional[AbstractSerializer] = MsgPackSerializer()
 
-    HEARTBEAT_INTERVAL: float = 3 * 0.01
+    HEARTBEAT_INTERVAL: float = 3 * 0.1
     STEP_DOWN_MISSED_HEARTBEATS: int = 5
-    ELECTION_INTERVAL_SPREAD: int = 30
+    ELECTION_INTERVAL_SPREAD: int = 3
     STEP_DOWN_INTERVAL: Optional[float] = None
     ELECTION_INTERVAL: Optional[float] = None
 
     APPEND_ENTRIES_MAX_NUM: Optional[int] = 3
 
     CRYPTOR_ENABLED: bool = False
-    CRYPTOR_SECRET: str = 'raftos sample secret key'
+    CRYPTOR_SECRET: bytes = b'raftos sample secret key'
     CRYPTOR: Optional[AbstractCryptor] = None
 
 
