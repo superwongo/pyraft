@@ -128,7 +128,7 @@ class State:
 
     @property
     def id(self) -> str:
-        return self.get_server_id(self.server.host, self.server.port)
+        return self.get_server_id(*self.server.addr)
 
     def _change_role(self, new_role: Type['BaseRole']):
         self.role.stop()

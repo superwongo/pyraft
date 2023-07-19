@@ -55,10 +55,10 @@ async def start(
     servers = parser_server_str(servers)
     if current_server_index >= len(servers):
         raise IndexError(f'设置的当前服务器索引参数current_server_index[{current_server_index}]越界')
-    current_host, current_port = servers.pop(current_server_index)
-    current_server = Server(current_host, current_port, loop=loop)
-    for host, port in servers:
-        current_server.update_cluster(host, port)
+    addr = servers.pop(current_server_index)
+    current_server = Server(addr, loop=loop)
+    for addr in servers:
+        current_server.update_cluster(addr)
     current_server.add_leader_listener(leader_listener)
     current_server.add_follower_listener(follower_listener)
     current_server.add_candidate_listener(candidate_listener)
